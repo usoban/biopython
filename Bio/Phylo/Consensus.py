@@ -12,6 +12,7 @@ adam consensus.
 from __future__ import division
 
 import random
+import pprint
 
 from ast import literal_eval
 from Bio.Phylo import BaseTree
@@ -371,6 +372,49 @@ def adam_consensus(trees):
     return BaseTree.Tree(root=_part(clades), rooted=True)
 
 
+def amt_consensus(trees):
+    """Search Asymmetric Median Tree from multiple trees
+
+    :Parameters:
+        trees: list
+            list of trees to produce consensus tree
+
+    @type trees: list of Bio.Phylo.Newick.Tree
+    """
+    species = trees[0].get_terminals()
+    species_names = [s.name for s in species]
+    n_species = len(species)
+
+    def _amt_bi(t_1, t_2):
+        # step 1: compute incompatibility graph of T1 and T2 G(T1, T2)
+
+        # a bad implementation: apply Lemma3 to each pair of chars Alpha of C(T_1) and Beta of C(T_2) to
+        #                       construct incompatibility graph
+        clades_bs_1 = [bs for _, bs in _tree_to_bitstrs(t_1, species_names).items() if bs.count('1') != n_species]
+        clades_bs_2 = [bs for _, bs in _tree_to_bitstrs(t_2, species_names).items() if bs.count('1') != n_species]
+        leaves_bs_1 = [_clade_to_bitstr(c, species_names) for c in t_1.find_clades(terminal=True)]
+        leaves_bs_2 = [_clade_to_bitstr(c, species_names) for c in t_2.find_clades(terminal=True)]
+
+        tree_coding_1 = set(clades_bs_1 + leaves_bs_1)
+        tree_coding_2 = set(clades_bs_2 + leaves_bs_2)
+        # print tree_coding_1, tree_coding_2
+
+        print species_names
+        pprint.pprint(tree_coding_1)
+        pprint.pprint(tree_coding_2)
+        # C_1 = [bs for cld, bs in tree_bs_1.items() if bs.count('1') < n_species]   # remove root clade
+        # C_2 = [bs for cld, bs in tree_bs_2.items() if bs.count('1') < n_species]   # remove root clade
+
+        # print C_1
+        # print C_2
+
+        # step 2: compute MIS of vertices in G(T1, T2) called I.
+        #         Encoding associated with I is C_0, which is subset of C(T1) U C(T2)
+
+        # step 3: compute T satisfying C(T) = C_0 and return T
+
+    _amt_bi(trees[0], trees[1])
+
 def _part(clades):
     """recursive function of adam consensus algorithm"""
     new_clade = None
@@ -576,10 +620,11 @@ def _clade_to_bitstr(clade, tree_term_names):
                                 for name in tree_term_names)
 
 
-def _tree_to_bitstrs(tree):
+def _tree_to_bitstrs(tree, term_names=None):
     """Create a dict of a tree's clades to corresponding BitStrings."""
     clades_bitstrs = {}
-    term_names = [term.name for term in tree.find_clades(terminal=True)]
+    if term_names is None:
+        term_names = [term.name for term in tree.find_clades(terminal=True)]
     for clade in tree.find_clades(terminal=False):
         bitstr = _clade_to_bitstr(clade, term_names)
         clades_bitstrs[clade] = bitstr
