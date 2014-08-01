@@ -386,27 +386,43 @@ def amt_consensus(trees):
     n_species = len(species)
 
     def _amt_bi(t_1, t_2):
+        """
+        @type t_1:  Bio.Phylo.Newick.Tree
+        @type t_2:  Bio.Phylo.Newick.Tree
+        """
         # step 1: compute incompatibility graph of T1 and T2 G(T1, T2)
 
         # a bad implementation: apply Lemma3 to each pair of chars Alpha of C(T_1) and Beta of C(T_2) to
         #                       construct incompatibility graph
+        #
         clades_bs_1 = [bs for _, bs in _tree_to_bitstrs(t_1, species_names).items() if bs.count('1') != n_species]
         clades_bs_2 = [bs for _, bs in _tree_to_bitstrs(t_2, species_names).items() if bs.count('1') != n_species]
         leaves_bs_1 = [_clade_to_bitstr(c, species_names) for c in t_1.find_clades(terminal=True)]
         leaves_bs_2 = [_clade_to_bitstr(c, species_names) for c in t_2.find_clades(terminal=True)]
 
-        tree_coding_1 = set(clades_bs_1 + leaves_bs_1)
-        tree_coding_2 = set(clades_bs_2 + leaves_bs_2)
-        # print tree_coding_1, tree_coding_2
+        tree_coding_1 = list(set(clades_bs_1 + leaves_bs_1))
+        tree_coding_2 = list(set(clades_bs_2 + leaves_bs_2))
 
+        print "="*40
+        print "Species names:"
         print species_names
+        print "="*40
+        print "T_1 and T_2 bitstrings (C_1 and C_2):"
         pprint.pprint(tree_coding_1)
         pprint.pprint(tree_coding_2)
-        # C_1 = [bs for cld, bs in tree_bs_1.items() if bs.count('1') < n_species]   # remove root clade
-        # C_2 = [bs for cld, bs in tree_bs_2.items() if bs.count('1') < n_species]   # remove root clade
+        print "="*40
 
-        # print C_1
-        # print C_2
+        # if pair is incompatible, establish a connection in incompatibility graph, where
+        # vertices represent edges of trees T_1 and T_2
+        incompatible_pairs = [
+            (bs1, bs2) for bs1 in tree_coding_1 for bs2 in tree_coding_2 if not bs1.iscompatible(bs2)
+        ]
+
+        print "*"*40
+        print "Incompatible pairs:"
+        pprint.pprint(incompatible_pairs)
+
+        # todo: construct incompatibility graph (with networkx data structures?)
 
         # step 2: compute MIS of vertices in G(T1, T2) called I.
         #         Encoding associated with I is C_0, which is subset of C(T1) U C(T2)
