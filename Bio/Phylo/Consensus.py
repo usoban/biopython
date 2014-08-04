@@ -11,6 +11,8 @@ adam consensus.
 """
 from __future__ import division
 
+import networkx as nx
+import matplotlib.pyplot as plt
 import random
 import pprint
 
@@ -387,8 +389,8 @@ def amt_consensus(trees):
 
     def _amt_bi(t_1, t_2):
         """
-        @type t_1:  Bio.Phylo.Newick.Tree
-        @type t_2:  Bio.Phylo.Newick.Tree
+        @type t_1:  Bio.Phylo.BaseTree.Tree
+        @type t_2:  Bio.Phylo.BaseTree.Tree
         """
         # step 1: compute incompatibility graph of T1 and T2 G(T1, T2)
 
@@ -402,15 +404,18 @@ def amt_consensus(trees):
 
         tree_coding_1 = list(set(clades_bs_1 + leaves_bs_1))
         tree_coding_2 = list(set(clades_bs_2 + leaves_bs_2))
+        unique_clades = set(tree_coding_1 + tree_coding_2)
 
-        print "="*40
-        print "Species names:"
-        print species_names
-        print "="*40
-        print "T_1 and T_2 bitstrings (C_1 and C_2):"
-        pprint.pprint(tree_coding_1)
-        pprint.pprint(tree_coding_2)
-        print "="*40
+        # print "="*40
+        # print "Species names:"
+        # print species_names
+        # print "="*40
+        # print "T_1 and T_2 bitstrings (C_1 and C_2):"
+        # pprint.pprint(tree_coding_1)
+        # pprint.pprint(tree_coding_2)
+        # print "="*40
+        # print "Unique bitstrings:"
+        # pprint.pprint(unique_clades)
 
         # if pair is incompatible, establish a connection in incompatibility graph, where
         # vertices represent edges of trees T_1 and T_2
@@ -418,14 +423,34 @@ def amt_consensus(trees):
             (bs1, bs2) for bs1 in tree_coding_1 for bs2 in tree_coding_2 if not bs1.iscompatible(bs2)
         ]
 
-        print "*"*40
-        print "Incompatible pairs:"
-        pprint.pprint(incompatible_pairs)
+        # print "*"*40
+        # print "Incompatible pairs:"
+        # pprint.pprint(incompatible_pairs)
 
-        # todo: construct incompatibility graph (with networkx data structures?)
+        """:type:networkx.Graph"""
+        incomp_graph = nx.Graph()
+        incomp_graph.add_nodes_from(unique_clades)
+        incomp_graph.add_edges_from(incompatible_pairs)
+
+        # pos = nx.graphviz_layout(incomp_graph, prog='dot')
+        # nx.draw_networkx(incomp_graph, pos)
+        # plt.axis('off')
+        # plt.savefig('/home/usoban/tmp/incomp_graph.png')
 
         # step 2: compute MIS of vertices in G(T1, T2) called I.
         #         Encoding associated with I is C_0, which is subset of C(T1) U C(T2)
+
+        """:type:networkx.Graph"""
+        mis = nx.maximal_independent_set(incomp_graph)
+        # mis.
+
+        # print '*'*40
+        # print 'MIS:'
+        # print mis
+        # pos = nx.graphviz_layout(mis, prog='dot')
+        # nx.draw_networkx(mis, pos)
+        # plt.axis('off')
+        # plt.savefig('/home/usoban/tmp/mis_graph.png')
 
         # step 3: compute T satisfying C(T) = C_0 and return T
 
