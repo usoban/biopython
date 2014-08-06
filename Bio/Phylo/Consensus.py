@@ -391,23 +391,18 @@ def amt_consensus(trees):
 
     @type trees: list of Bio.Phylo.Newick.Tree
     """
+    random.seed(1337)
+
     species = trees[0].get_terminals()
     species_names = [s.name for s in species]
     n_species = len(species)
 
     def _amt_bi(t_1, t_2):
-        # print t_1
-        # print '-'*40
-        # print t_2
         """
         @type t_1:  Bio.Phylo.BaseTree.Tree
         @type t_2:  Bio.Phylo.BaseTree.Tree
         """
         # step 1: compute incompatibility graph of T1 and T2 G(T1, T2)
-
-        # a bad implementation: apply Lemma3 to each pair of chars Alpha of C(T_1) and Beta of C(T_2) to
-        #                       construct incompatibility graph
-        #
         clades_bs_1 = [bs for _, bs in _tree_to_bitstrs(t_1, species_names).items() if bs.count('1') != n_species]
         clades_bs_2 = [bs for _, bs in _tree_to_bitstrs(t_2, species_names).items() if bs.count('1') != n_species]
         leaves_bs_1 = [_clade_to_bitstr(c, species_names) for c in t_1.find_clades(terminal=True)]
@@ -417,22 +412,9 @@ def amt_consensus(trees):
         tree_coding_2 = list(set(clades_bs_2 + leaves_bs_2))
         unique_bitstrings = set(tree_coding_1 + tree_coding_2)
 
-        print "="*40
-        print "Species names:"
-        print species_names
-        # print "="*40
-        # print "T_1 and T_2 bitstrings (C_1 and C_2):"
-        # pprint.pprint(tree_coding_1)
-        # pprint.pprint(tree_coding_2)
-        # print "="*40
-        # print "Unique bitstrings:"
-        # pprint.pprint(unique_clades)
-
         # if pair is incompatible, establish a connection in incompatibility graph, where
         # vertices represent edges of trees T_1 and T_2
-        incompatible_pairs = [
-            (bs1, bs2) for bs1 in tree_coding_1 for bs2 in tree_coding_2 if not bs1.iscompatible(bs2)
-        ]
+        incompatible_pairs = [(bs1, bs2) for bs1 in tree_coding_1 for bs2 in tree_coding_2 if not bs1.iscompatible(bs2)]
         """:type: list"""
 
         incomp_graph = nx.Graph()
@@ -443,12 +425,8 @@ def amt_consensus(trees):
 
         # step 2: compute MIS of vertices in G(T1, T2) called I.
         #         Encoding associated with I is C_0, which is subset of C(T1) U C(T2)
-
         mis = nx.maximal_independent_set(incomp_graph)
         """:type:list"""
-
-        print '='*40
-        pprint.pprint(mis)
 
         # plot incompatibility graph with differently colored vertices that belong to MIS
         plt.clf()
@@ -483,16 +461,10 @@ def amt_consensus(trees):
             else:
                 raise Exception('Column %d not unique' % k)
 
-        print column_values
-
         nodes = {eid: BaseTree.Clade(name=eid) for eid in column_values.keys() + ['root']}
         """:type: dict of (str, Bio.Phylo.BaseTree.Clade)"""
         top_level_edges = [eid for eid in column_values.keys() if column_values[eid] is None]
         other_edges = [eid for eid in column_values.keys() if column_values[eid] is not None]
-
-        print '*'*40
-        print 'Top level:'
-        print top_level_edges
 
         # connect top level edges to root
         for eid in top_level_edges:
@@ -502,27 +474,13 @@ def amt_consensus(trees):
         for eid in other_edges:
             nodes[column_values[eid]].clades.append(nodes[eid])
 
-        # mark terminals
-        # @TODO
-        print m
-        specie_nodes = np.argsort(m, axis=0)[::-1]
-        print specie_nodes
-        for sid, specie_node in enumerate(specie_nodes):
-            nodes[specie_node].name = species_names[sid]
+        # label terminals (tree leaves)
+        max_cols_by_rows = {ridx: np.max(cols_by_rows_index[ridx]) for ridx in cols_by_rows_index.keys()}
+        for row_id in max_cols_by_rows:
+            term = nodes[max_cols_by_rows[row_id]]
+            term.name = species_names[row_id]
 
-        # for i, specie in enumerate(species_names):
-        #     eid = np.argsort()
-        #     encoding = _BitString.from_boool(m[i, :])
-
-
-        # for leaf in nodes['root'].find_clades(terminal=True):
-        #     leaf_bs = _BitString.from_bool(m[leaf.name, :])
-        #     print leaf_bs.index_one()
-        #     # leaf.name =
-
-        t = BaseTree.Tree(root=nodes['root'])
-        print t
-        return t
+        return BaseTree.Tree(root=nodes['root'])
 
     return _amt_bi(trees[0], trees[1])
 
