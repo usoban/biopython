@@ -389,55 +389,69 @@ def amt_consensus(trees):
         trees: list
             list of trees to produce consensus tree
 
-    @type trees: list of Bio.Phylo.Newick.Tree
+    @type trees: list of Bio.Phylo.BaseTree.Tree
+    @returns: Bio.Phylo.BaseTree.Tree
     """
-    random.seed(1337)
+    from itertools import combinations
 
     species = trees[0].get_terminals()
     species_names = [s.name for s in species]
     n_species = len(species)
+    n_trees = len(trees)
 
-    def _amt_bi(t_1, t_2):
+    def _tree_encoding(tree):
         """
-        @type t_1:  Bio.Phylo.BaseTree.Tree
-        @type t_2:  Bio.Phylo.BaseTree.Tree
+        Computes a set of binary strings representing the input tree
+        @param tree: Input tree to encode
+        @type tree: Bio.Phylo.BaseTree.Tree
+        @returns: list of _BitString
         """
-        # step 1: compute incompatibility graph of T1 and T2 G(T1, T2)
-        clades_bs_1 = [bs for _, bs in _tree_to_bitstrs(t_1, species_names).items() if bs.count('1') != n_species]
-        clades_bs_2 = [bs for _, bs in _tree_to_bitstrs(t_2, species_names).items() if bs.count('1') != n_species]
-        leaves_bs_1 = [_clade_to_bitstr(c, species_names) for c in t_1.find_clades(terminal=True)]
-        leaves_bs_2 = [_clade_to_bitstr(c, species_names) for c in t_2.find_clades(terminal=True)]
+        clades = [bs for _, bs in _tree_to_bitstrs(tree, species_names).items() if bs.count('1') != n_species]
+        leaves = [_clade_to_bitstr(cld, species_names) for cld in tree.find_clades(terminal=True)]
+        return list(set(clades + leaves))
 
-        tree_coding_1 = list(set(clades_bs_1 + leaves_bs_1))
-        tree_coding_2 = list(set(clades_bs_2 + leaves_bs_2))
-        unique_bitstrings = set(tree_coding_1 + tree_coding_2)
+    tree_encodings = [_tree_encoding(t) for t in trees]
+    profile_bitstrings = set(reduce(lambda enc1, enc2: enc1 + enc2, tree_encodings))
+    bitstring_weights = {bs: len([i for i, t in enumerate(tree_encodings) if bs in t]) for bs in profile_bitstrings}
+    common_bitstrings = set(bs for bs, w in bitstring_weights.items() if w == n_trees)
 
-        # if pair is incompatible, establish a connection in incompatibility graph, where
-        # vertices represent edges of trees T_1 and T_2
-        incompatible_pairs = [(bs1, bs2) for bs1 in tree_coding_1 for bs2 in tree_coding_2 if not bs1.iscompatible(bs2)]
+    def _amt_val(tree_encoding):
+        """
+        Computes a value of tree with respect to the whole given tree profile.
+        The result is -Inf if tree encoding does not contain all common bitstrings or tree encoding contains bitstrings
+        that are not present in any of profile trees; otherwise, the result is a sum of weights of bitstrings that are
+        not common to all profile trees.
+
+        @type tree_encoding: list of _BitString
+        @returns: float
+        """
+        tree_enc_set = set(tree_encoding)
+        if len(common_bitstrings - tree_enc_set) != 0 or len(tree_enc_set - profile_bitstrings) != 0:
+            return -float('Inf')
+        else:
+            return sum([bitstring_weights[w] for w in tree_enc_set - common_bitstrings])
+
+    def _amt_bi(tree_enc_1, tree_enc_2):
+        """
+        Computes AMT of two bifurcating trees encoded as list of bitstrings representing clades
+        @type tree_enc_1:  list of _BitString
+        @type tree_enc_2:  list of _BitString
+        @return: (Bio.Phylo.BaseTree.Tree, list of _BitString)
+        """
+        # compute incompatibility graph of both trees
+        unique_bitstrings = set(tree_enc_1 + tree_enc_2)
+        incompatible_pairs = [(bs1, bs2) for bs1 in tree_enc_1 for bs2 in tree_enc_2 if not bs1.iscompatible(bs2)]
         """:type: list"""
-
         incomp_graph = nx.Graph()
         """:type:networkx.Graph"""
-
         incomp_graph.add_nodes_from(unique_bitstrings)
         incomp_graph.add_edges_from(incompatible_pairs)
 
-        # step 2: compute MIS of vertices in G(T1, T2) called I.
-        #         Encoding associated with I is C_0, which is subset of C(T1) U C(T2)
+        # compute maximal independent set of vertices in incompatibility graph
         mis = nx.maximal_independent_set(incomp_graph)
         """:type:list"""
 
-        # plot incompatibility graph with differently colored vertices that belong to MIS
-        plt.clf()
-        pos = nx.graphviz_layout(incomp_graph, prog='twopi')
-        nx.draw_networkx(G=incomp_graph, pos=pos, nodelist=incomp_graph.nodes(), node_color=[
-            'r' if n not in mis else 'b' for n in incomp_graph.nodes()
-        ])
-        plt.axis('off')
-        plt.savefig('/home/usoban/tmp/mis_graph.png')
-
-        # step 3: compute T satisfying C(T) = C_0 and return T
+        # compute a tree satisfying bitstrings given by labels of MIS vertices
         m = np.transpose(np.array([bs.to_numpy() for bs in sorted(mis, reverse=True, key=lambda bitstr: int(bitstr))]))
         ones = np.transpose(np.nonzero(m))
         row_indices = np.unique(ones[:, 0])
@@ -448,18 +462,17 @@ def amt_consensus(trees):
         for cell in ones:
             cols = cols_by_rows_index[cell[0]]
             valid_cols = cols[cols < cell[1]]
+            # search for a highest column index row which is lower than current cell column index.
             max_k = np.max(valid_cols) if valid_cols.size != 0 else None
             column_values[cell[1]].append(max_k)
 
-        # check uniqueness, otherwise tree does not exist.
         for k in column_values.keys():
             if len(set(column_values[k])) == 1:
                 column_values[k] = column_values[k][0]
             elif len(set(column_values[k])) == 0:
-                # TODO
-                raise Exception('Column empty. TODO.')
+                raise Exception('Column empty. Looks like this can actually happen. Examine the problem.')
             else:
-                raise Exception('Column %d not unique' % k)
+                raise Exception('Column %d not unique, tree does not exist for given encoding.' % k)
 
         nodes = {eid: BaseTree.Clade(name=eid) for eid in column_values.keys() + ['root']}
         """:type: dict of (str, Bio.Phylo.BaseTree.Clade)"""
@@ -470,7 +483,7 @@ def amt_consensus(trees):
         for eid in top_level_edges:
             nodes['root'].clades.append(nodes[eid])
 
-        # connect others
+        # connect other nodes between each other
         for eid in other_edges:
             nodes[column_values[eid]].clades.append(nodes[eid])
 
@@ -480,9 +493,28 @@ def amt_consensus(trees):
             term = nodes[max_cols_by_rows[row_id]]
             term.name = species_names[row_id]
 
-        return BaseTree.Tree(root=nodes['root'])
+        return BaseTree.Tree(root=nodes['root']), mis
 
-    return _amt_bi(trees[0], trees[1])
+    # Approx. method 1: select AMT created from two profile trees which maximizes _amt_val
+    best_amt_val = -float('Inf')
+    best_amt = None
+    for comb in combinations(range(0, len(trees)), 2):
+        amt, amt_encoding = _amt_bi(tree_encodings[comb[0]], tree_encodings[comb[1]])
+        amt_val = _amt_val(amt_encoding)
+        if amt_val > best_amt_val:
+            best_amt = amt
+            best_amt_val = amt_val
+
+    # # plot incompatibility graph with differently colored vertices that belong to MIS
+    # plt.clf()
+    # pos = nx.graphviz_layout(incomp_graph, prog='twopi')
+    # nx.draw_networkx(G=incomp_graph, pos=pos, nodelist=incomp_graph.nodes(), node_color=[
+    #     'r' if n not in mis else 'b' for n in incomp_graph.nodes()
+    # ])
+    # plt.axis('off')
+    # plt.savefig('/home/usoban/tmp/mis_graph.png')
+
+    return best_amt
 
 def _part(clades):
     """recursive function of adam consensus algorithm"""
