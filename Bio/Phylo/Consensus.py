@@ -12,9 +12,11 @@ adam consensus.
 from __future__ import division
 
 import networkx as nx
+import numpy as np
 import matplotlib.pyplot as plt
 import random
 import pprint
+
 
 from ast import literal_eval
 from Bio.Phylo import BaseTree
@@ -215,6 +217,12 @@ class _BitString(str):
         return (self.contains(other) or other.contains(self) or
                 self.independent(other))
 
+    def to_numpy(self):
+        return np.array([1 if ch == '1' else 0 for ch in self])
+
+    def __int__(self):
+        return literal_eval('0b'+self)
+
     @classmethod
     def from_bool(cls, bools):
         return cls(''.join(map(str, map(int, bools))))
@@ -388,6 +396,9 @@ def amt_consensus(trees):
     n_species = len(species)
 
     def _amt_bi(t_1, t_2):
+        # print t_1
+        # print '-'*40
+        # print t_2
         """
         @type t_1:  Bio.Phylo.BaseTree.Tree
         @type t_2:  Bio.Phylo.BaseTree.Tree
@@ -404,11 +415,11 @@ def amt_consensus(trees):
 
         tree_coding_1 = list(set(clades_bs_1 + leaves_bs_1))
         tree_coding_2 = list(set(clades_bs_2 + leaves_bs_2))
-        unique_clades = set(tree_coding_1 + tree_coding_2)
+        unique_bitstrings = set(tree_coding_1 + tree_coding_2)
 
-        # print "="*40
-        # print "Species names:"
-        # print species_names
+        print "="*40
+        print "Species names:"
+        print species_names
         # print "="*40
         # print "T_1 and T_2 bitstrings (C_1 and C_2):"
         # pprint.pprint(tree_coding_1)
@@ -422,39 +433,98 @@ def amt_consensus(trees):
         incompatible_pairs = [
             (bs1, bs2) for bs1 in tree_coding_1 for bs2 in tree_coding_2 if not bs1.iscompatible(bs2)
         ]
+        """:type: list"""
 
-        # print "*"*40
-        # print "Incompatible pairs:"
-        # pprint.pprint(incompatible_pairs)
-
-        """:type:networkx.Graph"""
         incomp_graph = nx.Graph()
-        incomp_graph.add_nodes_from(unique_clades)
-        incomp_graph.add_edges_from(incompatible_pairs)
+        """:type:networkx.Graph"""
 
-        # pos = nx.graphviz_layout(incomp_graph, prog='dot')
-        # nx.draw_networkx(incomp_graph, pos)
-        # plt.axis('off')
-        # plt.savefig('/home/usoban/tmp/incomp_graph.png')
+        incomp_graph.add_nodes_from(unique_bitstrings)
+        incomp_graph.add_edges_from(incompatible_pairs)
 
         # step 2: compute MIS of vertices in G(T1, T2) called I.
         #         Encoding associated with I is C_0, which is subset of C(T1) U C(T2)
 
-        """:type:networkx.Graph"""
         mis = nx.maximal_independent_set(incomp_graph)
-        # mis.
+        """:type:list"""
 
-        # print '*'*40
-        # print 'MIS:'
-        # print mis
-        # pos = nx.graphviz_layout(mis, prog='dot')
-        # nx.draw_networkx(mis, pos)
-        # plt.axis('off')
-        # plt.savefig('/home/usoban/tmp/mis_graph.png')
+        print '='*40
+        pprint.pprint(mis)
+
+        # plot incompatibility graph with differently colored vertices that belong to MIS
+        plt.clf()
+        pos = nx.graphviz_layout(incomp_graph, prog='twopi')
+        nx.draw_networkx(G=incomp_graph, pos=pos, nodelist=incomp_graph.nodes(), node_color=[
+            'r' if n not in mis else 'b' for n in incomp_graph.nodes()
+        ])
+        plt.axis('off')
+        plt.savefig('/home/usoban/tmp/mis_graph.png')
 
         # step 3: compute T satisfying C(T) = C_0 and return T
+        m = np.transpose(np.array([bs.to_numpy() for bs in sorted(mis, reverse=True, key=lambda bitstr: int(bitstr))]))
+        ones = np.transpose(np.nonzero(m))
+        row_indices = np.unique(ones[:, 0])
+        col_indices = np.unique(ones[:, 1])
+        cols_by_rows_index = {ridx: ones[ones[:, 0] == ridx][:, 1] for ridx in row_indices}
+        column_values = {cidx: [] for cidx in col_indices}
 
-    _amt_bi(trees[0], trees[1])
+        for cell in ones:
+            cols = cols_by_rows_index[cell[0]]
+            valid_cols = cols[cols < cell[1]]
+            max_k = np.max(valid_cols) if valid_cols.size != 0 else None
+            column_values[cell[1]].append(max_k)
+
+        # check uniqueness, otherwise tree does not exist.
+        for k in column_values.keys():
+            if len(set(column_values[k])) == 1:
+                column_values[k] = column_values[k][0]
+            elif len(set(column_values[k])) == 0:
+                # TODO
+                raise Exception('Column empty. TODO.')
+            else:
+                raise Exception('Column %d not unique' % k)
+
+        print column_values
+
+        nodes = {eid: BaseTree.Clade(name=eid) for eid in column_values.keys() + ['root']}
+        """:type: dict of (str, Bio.Phylo.BaseTree.Clade)"""
+        top_level_edges = [eid for eid in column_values.keys() if column_values[eid] is None]
+        other_edges = [eid for eid in column_values.keys() if column_values[eid] is not None]
+
+        print '*'*40
+        print 'Top level:'
+        print top_level_edges
+
+        # connect top level edges to root
+        for eid in top_level_edges:
+            nodes['root'].clades.append(nodes[eid])
+
+        # connect others
+        for eid in other_edges:
+            nodes[column_values[eid]].clades.append(nodes[eid])
+
+        # mark terminals
+        # @TODO
+        print m
+        specie_nodes = np.argsort(m, axis=0)[::-1]
+        print specie_nodes
+        for sid, specie_node in enumerate(specie_nodes):
+            nodes[specie_node].name = species_names[sid]
+
+        # for i, specie in enumerate(species_names):
+        #     eid = np.argsort()
+        #     encoding = _BitString.from_boool(m[i, :])
+
+
+        # for leaf in nodes['root'].find_clades(terminal=True):
+        #     leaf_bs = _BitString.from_bool(m[leaf.name, :])
+        #     print leaf_bs.index_one()
+        #     # leaf.name =
+
+        t = BaseTree.Tree(root=nodes['root'])
+        print t
+        return t
+
+    return _amt_bi(trees[0], trees[1])
 
 def _part(clades):
     """recursive function of adam consensus algorithm"""
