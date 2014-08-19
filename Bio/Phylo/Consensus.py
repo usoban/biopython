@@ -393,6 +393,7 @@ def amt_consensus(trees):
     @returns: Bio.Phylo.BaseTree.Tree
     """
     from itertools import combinations
+    import igraph
 
     species = trees[0].get_terminals()
     species_names = [s.name for s in species]
@@ -439,17 +440,26 @@ def amt_consensus(trees):
         @return: (Bio.Phylo.BaseTree.Tree, list of _BitString)
         """
         # compute incompatibility graph of both trees
-        unique_bitstrings = set(tree_enc_1 + tree_enc_2)
-        incompatible_pairs = [(bs1, bs2) for bs1 in tree_enc_1 for bs2 in tree_enc_2 if not bs1.iscompatible(bs2)]
+        unique_bitstrings = list(set(tree_enc_1 + tree_enc_2))
+        ubs_idx = {bs: i for i, bs in enumerate(unique_bitstrings)}
+        incompatible_pairs = [(ubs_idx[bs1], ubs_idx[bs2]) for bs1 in tree_enc_1 for bs2 in tree_enc_2 if not bs1.iscompatible(bs2)]
         """:type: list"""
-        incomp_graph = nx.Graph()
-        """:type:networkx.Graph"""
-        incomp_graph.add_nodes_from(unique_bitstrings)
-        incomp_graph.add_edges_from(incompatible_pairs)
+        incomp_graph = igraph.Graph()
+        """:type:igraph.Graph"""
+        incomp_graph.add_vertices(unique_bitstrings)
+        incomp_graph.add_edges(incompatible_pairs)
 
-        # compute maximal independent set of vertices in incompatibility graph
-        mis = nx.maximal_independent_set(incomp_graph)
-        """:type:list"""
+        # compute largest independent sets of vertices in incompatibility graph
+        independent_sets = incomp_graph.largest_independent_vertex_sets()
+        # choose the one with maximum value
+        mis = None
+        max_val = -float('Inf')
+        for iset in independent_sets:
+            bs_iset = [unique_bitstrings[i] for i in iset]
+            val = _amt_val(bs_iset)
+            if val > max_val:
+                max_val = val
+                mis = bs_iset
 
         # compute a tree satisfying bitstrings given by labels of MIS vertices
         m = np.transpose(np.array([bs.to_numpy() for bs in sorted(mis, reverse=True, key=lambda bitstr: int(bitstr))]))
@@ -493,6 +503,11 @@ def amt_consensus(trees):
             term = nodes[max_cols_by_rows[row_id]]
             term.name = species_names[row_id]
 
+        # purge node names if they do not contain string or they contain 'root' string
+        for nk in nodes.keys():
+            if type(nodes[nk].name) != str or nodes[nk].name == 'root':
+                nodes[nk].name = ''
+
         return BaseTree.Tree(root=nodes['root']), mis
 
     # Approx. method 1: select AMT created from two profile trees which maximizes _amt_val
@@ -504,15 +519,6 @@ def amt_consensus(trees):
         if amt_val > best_amt_val:
             best_amt = amt
             best_amt_val = amt_val
-
-    # # plot incompatibility graph with differently colored vertices that belong to MIS
-    # plt.clf()
-    # pos = nx.graphviz_layout(incomp_graph, prog='twopi')
-    # nx.draw_networkx(G=incomp_graph, pos=pos, nodelist=incomp_graph.nodes(), node_color=[
-    #     'r' if n not in mis else 'b' for n in incomp_graph.nodes()
-    # ])
-    # plt.axis('off')
-    # plt.savefig('/home/usoban/tmp/mis_graph.png')
 
     return best_amt
 
@@ -720,6 +726,7 @@ def _clade_to_bitstr(clade, tree_term_names):
     return _BitString.from_bool((name in clade_term_names)
                                 for name in tree_term_names)
 
+clade_to_bitstr = _clade_to_bitstr
 
 def _tree_to_bitstrs(tree, term_names=None):
     """Create a dict of a tree's clades to corresponding BitStrings."""
@@ -730,6 +737,8 @@ def _tree_to_bitstrs(tree, term_names=None):
         bitstr = _clade_to_bitstr(clade, term_names)
         clades_bitstrs[clade] = bitstr
     return clades_bitstrs
+
+tree_to_bitstrs = _tree_to_bitstrs
 
 
 def _bitstring_topology(tree):
