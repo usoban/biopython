@@ -382,7 +382,7 @@ def adam_consensus(trees):
     return BaseTree.Tree(root=_part(clades), rooted=True)
 
 
-def amt_consensus(trees):
+def amt_consensus(trees, method='no_approx'):
     """Search Asymmetric Median Tree from multiple trees
 
     :Parameters:
@@ -432,26 +432,50 @@ def amt_consensus(trees):
         else:
             return sum([bitstring_weights[w] for w in tree_enc_set - common_bitstrings])
 
-    def _amt_bi(tree_enc_1, tree_enc_2):
+    def _incompat_graph(trees):
         """
-        Computes AMT of two bifurcating trees encoded as list of bitstrings representing clades
-        @type tree_enc_1:  list of _BitString
-        @type tree_enc_2:  list of _BitString
-        @return: (Bio.Phylo.BaseTree.Tree, list of _BitString)
+        Computes igraph.Graph incompatibility graph for given list of tree encodings
+        @type trees: list of list of _BitString
+        @return (igraph.Graph, list of _BitString, dict of _BitString to int)
         """
-        # compute incompatibility graph of both trees
-        unique_bitstrings = list(set(tree_enc_1 + tree_enc_2))
-        ubs_idx = {bs: i for i, bs in enumerate(unique_bitstrings)}
-        incompatible_pairs = [(ubs_idx[bs1], ubs_idx[bs2]) for bs1 in tree_enc_1 for bs2 in tree_enc_2 if not bs1.iscompatible(bs2)]
+        all_bs = reduce(lambda x, y: x+y, trees, [])
+        unique_bitstrings = list(set(all_bs))
+        ubs_idx = {bs: idx for idx, bs in enumerate(unique_bitstrings)}
+        incompatible_pairs = [(ubs_idx[bs1], ubs_idx[bs2]) for bs1 in unique_bitstrings for bs2 in unique_bitstrings if not bs1.iscompatible(bs2)]
         """:type: list"""
         incomp_graph = igraph.Graph()
         """:type:igraph.Graph"""
         incomp_graph.add_vertices(unique_bitstrings)
         incomp_graph.add_edges(incompatible_pairs)
 
-        # compute largest independent sets of vertices in incompatibility graph
+        return incomp_graph, unique_bitstrings, ubs_idx
+
+    def _incompat_graph_nx(trees):
+        """
+        Computes networkx.Graph incompatibility graph for given list of tree encodings
+        @type trees: list of list of _BitString
+        @return (networkx.Graph, list of _BitString)
+        """
+        all_bs = reduce(lambda x, y: x+y, trees, [])
+        unique_bitstrings = list(set(all_bs))
+        incompatible_pairs = [(bs1, bs2) for bs1 in unique_bitstrings for bs2 in unique_bitstrings if not bs1.iscompatible(bs2)]
+        """:type: list"""
+        incomp_graph = nx.Graph()
+        """:type:networkx.Graph"""
+        incomp_graph.add_nodes_from(unique_bitstrings)
+        incomp_graph.add_edges_from(incompatible_pairs)
+
+        return incomp_graph, unique_bitstrings
+
+    def _max_indep_set(incomp_graph, unique_bitstrings):
+        """
+        Finds all largest independent sets of vertices in incompatibility graph and chooses the one that
+        maximizes value function.
+        @type igraph.Graph: the incompatibility graph
+        @type unique_bitstrings: list of _BitString
+        @return list of _BitString
+        """
         independent_sets = incomp_graph.largest_independent_vertex_sets()
-        # choose the one with maximum value
         mis = None
         max_val = -float('Inf')
         for iset in independent_sets:
@@ -460,9 +484,15 @@ def amt_consensus(trees):
             if val > max_val:
                 max_val = val
                 mis = bs_iset
+        return mis, max_val
 
-        # compute a tree satisfying bitstrings given by labels of MIS vertices
-        m = np.transpose(np.array([bs.to_numpy() for bs in sorted(mis, reverse=True, key=lambda bitstr: int(bitstr))]))
+    def _reconstruct(bitstrings):
+        """
+        Reconstructs a phylogenetic tree from given bitstrings
+        @type bitstrings: list of _BitString
+        @return Bio.Phylo.BaseTree.Tree
+        """
+        m = np.transpose(np.array([bs.to_numpy() for bs in sorted(bitstrings, reverse=True, key=lambda bs: int(bs))]))
         ones = np.transpose(np.nonzero(m))
         row_indices = np.unique(ones[:, 0])
         col_indices = np.unique(ones[:, 1])
@@ -482,6 +512,7 @@ def amt_consensus(trees):
             elif len(set(column_values[k])) == 0:
                 raise Exception('Column empty. Looks like this can actually happen. Examine the problem.')
             else:
+                print m
                 raise Exception('Column %d not unique, tree does not exist for given encoding.' % k)
 
         nodes = {eid: BaseTree.Clade(name=eid) for eid in column_values.keys() + ['root']}
@@ -508,19 +539,58 @@ def amt_consensus(trees):
             if type(nodes[nk].name) != str or nodes[nk].name == 'root':
                 nodes[nk].name = ''
 
-        return BaseTree.Tree(root=nodes['root']), mis
+        return BaseTree.Tree(root=nodes['root'])
 
-    # Approx. method 1: select AMT created from two profile trees which maximizes _amt_val
-    best_amt_val = -float('Inf')
-    best_amt = None
-    for comb in combinations(range(0, len(trees)), 2):
-        amt, amt_encoding = _amt_bi(tree_encodings[comb[0]], tree_encodings[comb[1]])
-        amt_val = _amt_val(amt_encoding)
-        if amt_val > best_amt_val:
-            best_amt = amt
-            best_amt_val = amt_val
+    def _amt_approx_bi(trees):
+        """
+        Computes AMT from input trees using approximation method 1 (computing AMTs from two trees at a time).
+        @type trees:  list of list of _BitString
+        @return: Bio.Phylo.BaseTree.Tree
+        """
+        best_amt_val = -float('Inf')
+        best_amt = None
+        for comb in combinations(range(0, len(trees)), 2):
+            incomp_graph, unique_bitstrings, _ = _incompat_graph([trees[comb[0]], trees[comb[1]]])
+            mis, mis_val = _max_indep_set(incomp_graph, unique_bitstrings)
+            if mis_val > best_amt_val:
+                best_amt = _reconstruct(mis)
 
-    return best_amt
+        return best_amt
+
+    def _amt_approx_mm(trees):
+        """
+        Computes AMT from input trees using approximation method 2 (maximum matching)
+        @type trees: list of list of _BitString
+        @return Bio.Phylo.BaseTree.Tree
+        """
+        incomp_graph, unique_bitstrings = _incompat_graph_nx(trees)
+        vertices = incomp_graph.nodes()
+        incomp_graph.remove_nodes_from(common_bitstrings)
+        matching = nx.max_weight_matching(incomp_graph, maxcardinality=True)
+        for match in matching.keys():
+            vertices.remove(match)
+        return _reconstruct(vertices)
+
+    def _amt_noapprox(trees):
+        """
+        Computes AMT from input trees.
+        @type trees: list of list of _BitString
+        @return Bio.Phylo.BaseTree.Tree
+        """
+        incomp_graph, unique_bitstrings, _ = _incompat_graph(trees)
+        mis, mis_val = _max_indep_set(incomp_graph, unique_bitstrings)
+        return _reconstruct(mis)
+
+    if method == 'no_approx':
+        amt = _amt_noapprox(tree_encodings)
+    elif method == 'bi_approx':
+        amt = _amt_approx_bi(tree_encodings)
+    elif method == 'maxmatch_approx':
+        amt = _amt_approx_mm(tree_encodings)
+    else:
+        raise Exception('Invalid method name. Given: %s; available: no_approx, bi_approx, maxmatch_approx' % method)
+
+    return amt
 
 def _part(clades):
     """recursive function of adam consensus algorithm"""
